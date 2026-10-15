@@ -57,9 +57,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
             self.refresh()
         }
-        updateWindow.onCheck = { [weak self] in self?.updateCoordinator.check() }
+        updateWindow.onCheck = { [weak self] in self?.updateCoordinator.check(autoInstall: true) }
         updateWindow.onToggleAutomatic = { [weak self] enabled in self?.updateCoordinator.automaticEnabled = enabled }
         updateWindow.onInstall = { [weak self] manifest in self?.installUpdate(manifest) }
+        updateCoordinator.onVerifiedUpdate = { [weak self] manifest in self?.installUpdate(manifest) }
         item.autosaveName = "CoolMacStatusItem"
         item.button?.image = NSImage(systemSymbolName: "fanblades", accessibilityDescription: "清凉风扇")
         item.button?.imagePosition = .imageLeading
@@ -324,20 +325,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func showUpdate() {
         updateCoordinator.presentsWindow = true
         updateWindow.present(state: updateCoordinator.state, automatic: updateCoordinator.automaticEnabled, relativeTo: item.button)
-        if case .idle = updateCoordinator.state { updateCoordinator.check() }
+        if case .idle = updateCoordinator.state { updateCoordinator.check(autoInstall: true) }
     }
 
     /// Hands the fan back and confirms it before any component is replaced.
     private func installUpdate(_ manifest: UpdateManifest) {
         guard !updating else { return }
-        let alert = NSAlert()
-        alert.messageText = "安装 \(manifest.version)（\(manifest.build)）"
-        alert.informativeText = "安装前会先把风扇交还系统自动并确认；确认失败会中止，不会替换组件。\n\n随后 macOS 会请求管理员授权。安装完成后需要退出并重新打开\(Product.name)，并按提示重新安全自检。"
-        alert.addButton(withTitle: "继续")
-        alert.addButton(withTitle: "取消")
-        NSApp.activate(ignoringOtherApps: true)
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-
+        // No extra confirmation step: the user already asked for the update by
+        // clicking 检查更新, and macOS still requires administrator authorization.
+        // The fan is handed back and confirmed before anything is replaced.
         updating = true
         controlling = false
         commissioning = false
@@ -356,9 +352,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 }
                 guard confirmed else { throw HardwareError("系统自动模式尚未确认，已中止安装") }
                 // The coordinator stages the verified package and envelope under a
-                // fresh UUID; only that identifier reaches the privileged tool.
-                updateCoordinator.install(manifest) { identifier in
-                    try await AuthorizedActions.runInstallTool(identifier)
+                // fresh UUID; only that identifier leaves this process. The
+                // already-privileged background service applies it, so no password
+                // is asked for. A background service older than this build cannot
+                // do that, so that one case still falls back to the authorized tool.
+                updateCoordinator.install(manifest) { [weak self] identifier in
+                    guard let self else { throw HardwareError("界面已退出") }
+                    do {
+                        let response = try await self.client.request(ServiceRequest(
+                            operation: .installUpdate,
+                            session: self.session,
+                            updateID: identifier.uuidString.lowercased()
+                        ))
+                        guard response.ok else { throw HardwareError(response.error ?? response.status.message) }
+                    } catch {
+                        try await AuthorizedActions.runInstallTool(identifier)
+                    }
                 }
             } catch {
                 uiError = "更新未完成：\(error.localizedDescription)"

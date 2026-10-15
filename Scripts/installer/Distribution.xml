@@ -12,5 +12,5 @@
     <choice id="default" visible="false" title="清凉风扇与后台组件">
         <pkg-ref id="local.hx10.coolmac.pkg"/>
     </choice>
-    <pkg-ref id="local.hx10.coolmac.pkg" version="1.1.4" onConclusion="none">CoolMacComponent.pkg</pkg-ref>
+    <pkg-ref id="local.hx10.coolmac.pkg" version="1.1.14" onConclusion="none">CoolMacComponent.pkg</pkg-ref>
 </installer-gui-script>

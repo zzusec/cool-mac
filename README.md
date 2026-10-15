@@ -18,13 +18,17 @@ Apple Silicon 没有「系统目标 + 偏移」接口，本程序只能接管风
 
 应用启动后及每 6 小时自动检查 GitHub Releases（`zzusec/cool-mac`），发现兼容新版会自动下载。更新清单用 Ed25519 签名，包按 SHA-256 与精确长度校验；签名、摘要或版本任一项不符都不会安装。安装通过「设置 → 检查更新…」进行，需 macOS 管理员授权，不承诺免提示静默安装。
 
-安装前会先撤销控制并确认系统自动，未确认就中止。安装由固定的 root-owned 更新工具执行：它只接收本机生成的 UUID，不联网、不接受路径或命令，会先把包复制到 root 私有目录并对副本重新校验，再调用系统安装器。安装完成后需退出并重新打开应用，并重新运行一次安全自检。
+安装前会先撤销控制并确认系统自动，未确认就中止。安装由**已常驻的 root 后台**执行，界面只传一个本机生成的 UUID，不传路径、URL 或命令；后台会重新验签、拒绝降级、把包复制到 root 私有目录并对副本核对摘要后才调用系统安装器。因此**更新不再要求输入管理员密码**（首次安装仍需一次授权）。
+
+安装日志写在 `~/Library/Application Support/CoolMac/Updates/<uuid>.log`，安装失败时界面会显示其中的关键行；界面自身的流程记录在 `update-trace.log`。
 
 发布新版本（本机执行，私钥只存在登录钥匙串，不进入仓库）：
 
 ```sh
-/Users/hx10/cool-mac/Scripts/release.sh --version 1.1.5 --build 7 --notes <文件>
+Scripts/release.sh --version 1.1.6 --build 8 --notes <文件>
 ```
+
+脚本会用本机的 Apple Development 证书重新签名发布工具，使钥匙串把它认作同一个程序；否则 ad-hoc 签名让工具的身份等于内容哈希，每次重建都会再弹一次授权。第一次读取私钥时点「始终允许」即可长期生效。若本机没有可用证书，可用 `COOLMAC_SIGNING_IDENTITY` 指定，或接受每次重建都弹窗。
 
 更新工具固定读取 `/Users/hx10/Library/Application Support/CoolMac/Updates`（本机专用路径），该目录属于桌面用户，因此工具必须重新验签与校验副本后才能安装。
 

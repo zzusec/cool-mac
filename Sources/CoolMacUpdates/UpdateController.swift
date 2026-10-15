@@ -67,13 +67,15 @@ public actor UpdateController {
         currentVersion: String,
         currentBuild: Int,
         into directory: URL,
-        force: Bool = false
+        force: Bool = false,
+        progress: (@Sendable (Int, Int64) -> Void)? = nil
     ) async throws -> UpdateManifest? {
         try await checkAndDownloadVerified(
             currentVersion: currentVersion,
             currentBuild: currentBuild,
             into: directory,
-            force: force
+            force: force,
+            progress: progress
         )?.manifest
     }
 
@@ -84,7 +86,8 @@ public actor UpdateController {
         currentVersion: String,
         currentBuild: Int,
         into directory: URL,
-        force: Bool = false
+        force: Bool = false,
+        progress: (@Sendable (Int, Int64) -> Void)? = nil
     ) async throws -> VerifiedUpdate? {
         if let existing = inFlight {
             return try await existing.value
@@ -105,7 +108,7 @@ public actor UpdateController {
                 return nil
             }
             let downloader = UpdateDownloader(transport: transport)
-            let packageURL = try await downloader.download(verified.manifest, into: directory)
+            let packageURL = try await downloader.download(verified.manifest, into: directory, progress: progress)
             return VerifiedUpdate(manifest: verified.manifest, envelope: verified.envelope, packageURL: packageURL)
         }
 

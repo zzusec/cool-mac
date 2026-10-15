@@ -8,6 +8,29 @@ import Foundation
 /// its cases, and never as a truncated-but-successful result.
 public protocol UpdateTransport: Sendable {
     func data(from url: URL, byteLimit: Int, timeout: Double) async throws -> (Data, URLResponse)
+    /// As `data`, but reports transfer progress. `expected` is negative when the
+    /// server did not announce a length. A default implementation forwards to
+    /// `data` and reports only the start and the end, so fakes stay simple.
+    func download(
+        from url: URL,
+        byteLimit: Int,
+        timeout: Double,
+        progress: @escaping @Sendable (Int, Int64) -> Void
+    ) async throws -> (Data, URLResponse)
+}
+
+extension UpdateTransport {
+    public func download(
+        from url: URL,
+        byteLimit: Int,
+        timeout: Double,
+        progress: @escaping @Sendable (Int, Int64) -> Void
+    ) async throws -> (Data, URLResponse) {
+        progress(0, -1)
+        let result = try await data(from: url, byteLimit: byteLimit, timeout: timeout)
+        progress(result.0.count, Int64(result.0.count))
+        return result
+    }
 }
 
 /// The real transport. An ephemeral, credential-free `URLSession` with a hard
@@ -39,6 +62,24 @@ public struct URLSessionUpdateTransport: UpdateTransport, @unchecked Sendable {
     }
 
     public func data(from url: URL, byteLimit: Int, timeout: Double) async throws -> (Data, URLResponse) {
+        try await transfer(from: url, byteLimit: byteLimit, timeout: timeout, progress: nil)
+    }
+
+    public func download(
+        from url: URL,
+        byteLimit: Int,
+        timeout: Double,
+        progress: @escaping @Sendable (Int, Int64) -> Void
+    ) async throws -> (Data, URLResponse) {
+        try await transfer(from: url, byteLimit: byteLimit, timeout: timeout, progress: progress)
+    }
+
+    private func transfer(
+        from url: URL,
+        byteLimit: Int,
+        timeout: Double,
+        progress: (@Sendable (Int, Int64) -> Void)?
+    ) async throws -> (Data, URLResponse) {
         guard byteLimit > 0 else {
             throw UpdateError.assetTooLarge(limit: byteLimit, reported: 0)
         }
@@ -46,7 +87,7 @@ public struct URLSessionUpdateTransport: UpdateTransport, @unchecked Sendable {
         request.httpMethod = "GET"
         request.setValue("application/octet-stream", forHTTPHeaderField: "Accept")
 
-        let guardrail = TransferGuard(byteLimit: byteLimit)
+        let guardrail = TransferGuard(byteLimit: byteLimit, progress: progress)
         do {
             let (data, response) = try await fetch(request, guardrail: guardrail, timeout: timeout)
             if let blocked = guardrail.blockedRedirectTarget {
@@ -129,13 +170,15 @@ enum UpdateHTTP {
 final class TransferGuard: NSObject, URLSessionDataDelegate, @unchecked Sendable {
     private let lock = NSLock()
     private let byteLimit: Int
+    private let progress: (@Sendable (Int, Int64) -> Void)?
     private var receivedBytes = 0
     private var exceeded = false
     private var blockedTarget: String?
     private var storedResponse: URLResponse?
 
-    init(byteLimit: Int) {
+    init(byteLimit: Int, progress: (@Sendable (Int, Int64) -> Void)? = nil) {
         self.byteLimit = byteLimit
+        self.progress = progress
         super.init()
     }
 
@@ -191,7 +234,10 @@ final class TransferGuard: NSObject, URLSessionDataDelegate, @unchecked Sendable
         receivedBytes += data.count
         if receivedBytes > byteLimit { exceeded = true }
         let over = exceeded
+        let received = receivedBytes
+        let expected = dataTask.response?.expectedContentLength ?? -1
         lock.unlock()
+        progress?(received, expected)
         if over { dataTask.cancel() }
     }
 }

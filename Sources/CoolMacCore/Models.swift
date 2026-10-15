@@ -2,9 +2,9 @@ import Foundation
 
 public enum Product {
     public static let name = "清凉风扇"
-    public static let version = "1.1.4"
+    public static let version = "1.1.14"
     /// Monotonic build number for update comparison. Never reused or decreased.
-    public static let build = 6
+    public static let build = 16
     public static let bundleID = "local.hx10.coolmac"
     public static let service = "local.hx10.coolmac.helper"
     public static let helperPath = "/Library/PrivilegedHelperTools/local.hx10.coolmac.helper"
@@ -16,7 +16,7 @@ public enum Product {
     /// copying it into a root-private staging directory.
     public static let updateCacheDirectory = "Library/Application Support/CoolMac/Updates"
     public static let updateCacheDirectoryAbsolute = "/Users/hx10/Library/Application Support/CoolMac/Updates"
-    public static let protocolVersion = 2
+    public static let protocolVersion = 3
 }
 
 /// Fan speeds above this fraction of the rated maximum are never commanded by
@@ -139,7 +139,7 @@ public struct ServiceStatus: Codable, Sendable, Equatable {
 }
 
 public enum RequestOperation: String, Codable, Sendable {
-    case status, select, renew, restore, commission
+    case status, select, renew, restore, commission, installUpdate
 }
 
 public struct ServiceRequest: Codable, Sendable {
@@ -148,12 +148,17 @@ public struct ServiceRequest: Codable, Sendable {
     public let session: String
     public let mode: CoolingMode?
     public let enhancement: Int?
+    /// Canonical UUID of a staged, already-verified update. Only `installUpdate`
+    /// may carry it, and only the identifier ever crosses the privilege boundary —
+    /// never a path, URL or command.
+    public let updateID: String?
 
-    public init(operation: RequestOperation, session: String, mode: CoolingMode? = nil, enhancement: Int? = nil) {
+    public init(operation: RequestOperation, session: String, mode: CoolingMode? = nil, enhancement: Int? = nil, updateID: String? = nil) {
         self.operation = operation
         self.session = session
         self.mode = mode
         self.enhancement = enhancement
+        self.updateID = updateID
     }
 }
 

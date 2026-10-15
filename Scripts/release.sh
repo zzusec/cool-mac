@@ -100,6 +100,25 @@ BIN_DIR="$(/usr/bin/xcrun swift build --package-path "$ROOT" --scratch-path "$SC
 RELEASE_TOOL="$BIN_DIR/CoolMacRelease"
 [[ -x "$RELEASE_TOOL" && ! -L "$RELEASE_TOOL" ]] || fail "未找到发布工具：$RELEASE_TOOL"
 
+# Re-sign with a real identity so the keychain sees a stable program across
+# rebuilds. An ad-hoc signature makes the tool's identity its content hash, so
+# every rebuild is a new program and the signing key prompts again.
+SIGNING_IDENTITY="${COOLMAC_SIGNING_IDENTITY:-}"
+if [[ -z "$SIGNING_IDENTITY" ]]; then
+    SIGNING_IDENTITY="$(/usr/bin/security find-identity -v -p codesigning 2>/dev/null \
+        | /usr/bin/sed -n 's/.*"\(Apple Development:.*\)"/\1/p' | /usr/bin/head -1)"
+fi
+if [[ -n "$SIGNING_IDENTITY" ]]; then
+    /usr/bin/codesign --force --sign "$SIGNING_IDENTITY" --timestamp=none \
+        --identifier 'local.hx10.coolmac.release' "$RELEASE_TOOL" >/dev/null \
+        || fail "用 '$SIGNING_IDENTITY' 签名发布工具失败。"
+    /usr/bin/codesign --verify --strict "$RELEASE_TOOL" || fail '发布工具签名校验失败。'
+    echo "发布工具已用 '$SIGNING_IDENTITY' 签名（钥匙串授权可长期复用）。"
+else
+    echo '警告：未找到 Apple Development 身份，发布工具仍是 ad-hoc 签名；' >&2
+    echo '      每次重新构建后，读取更新私钥都会再次弹出钥匙串授权。' >&2
+fi
+
 # 3) 签名清单（私钥只在登录钥匙串；本脚本不接触私钥）
 OUT="$DIST/update.json"
 [[ ! -L "$OUT" ]] || fail "输出路径是符号链接：$OUT"

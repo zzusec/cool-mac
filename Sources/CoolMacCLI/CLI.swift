@@ -43,6 +43,13 @@ struct CoolMacCLI {
             case "restore": operation = .restore
             case "commission": operation = .commission
             case "cool", "boost", "system": operation = .select; mode = CoolingMode(rawValue: command)
+            case "install":
+                guard let value = args.dropFirst().first else { throw HardwareError("用法：coolmacctl install <已暂存的更新 UUID>") }
+                guard let uuid = UUID(uuidString: value), uuid.uuidString.lowercased() == value else { throw HardwareError("必须是规范小写 UUID") }
+                let response = try await client.request(ServiceRequest(operation: .installUpdate, session: session, updateID: value))
+                print(String(decoding: try encoder.encode(response), as: UTF8.self))
+                if !response.ok { throw HardwareError(response.error ?? response.status.message) }
+                return
             default: throw HardwareError("用法：coolmacctl diagnose|keys|status|restore|commission|cool|boost|system [--seconds N] [--enhancement 0…80]")
             }
             var response = try await client.request(ServiceRequest(operation: operation, session: session, mode: mode, enhancement: mode == .system ? nil : enhancement))

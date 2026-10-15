@@ -12,6 +12,7 @@ final class UpdateWindowController: NSWindowController {
     private let notesLabel = NSTextField(labelWithString: "")
     private let checkButton = NSButton(title: "检查更新", target: nil, action: nil)
     private let installButton = NSButton(title: "安装并重启…", target: nil, action: nil)
+    private let progressBar = NSProgressIndicator()
     private let automaticCheckbox = NSButton(checkboxWithTitle: "自动检查更新（每 6 小时）", target: nil, action: nil)
 
     var onCheck: (() -> Void)?
@@ -53,6 +54,15 @@ final class UpdateWindowController: NSWindowController {
         notesLabel.frame = NSRect(x: 20, y: 96, width: 360, height: 40)
         content.addSubview(notesLabel)
 
+        progressBar.frame = NSRect(x: 20, y: 104, width: 360, height: 12)
+        progressBar.isIndeterminate = false
+        progressBar.minValue = 0
+        progressBar.maxValue = 100
+        progressBar.controlSize = .small
+        progressBar.isHidden = true
+        progressBar.setAccessibilityLabel("下载进度")
+        content.addSubview(progressBar)
+
         automaticCheckbox.frame = NSRect(x: 20, y: 66, width: 360, height: 20)
         automaticCheckbox.target = self
         automaticCheckbox.action = #selector(toggleAutomatic)
@@ -93,7 +103,8 @@ final class UpdateWindowController: NSWindowController {
             manifest = nil
         case .downloading(let percent):
             statusLabel.stringValue = "正在下载 \(percent)%"
-            detailLabel.stringValue = ""
+            detailLabel.stringValue = "下载完成后会自动校验签名与摘要，然后开始安装。"
+            notesLabel.stringValue = ""
         case .ready(let value):
             statusLabel.stringValue = "发现新版本 \(value.version)（\(value.build)）"
             detailLabel.stringValue = "已下载并通过签名与摘要验证。安装需要 macOS 管理员授权，安装前会先确认风扇已交还系统自动。"
@@ -112,6 +123,12 @@ final class UpdateWindowController: NSWindowController {
             detailLabel.stringValue = message
             notesLabel.stringValue = ""
             manifest = nil
+        }
+        if case .downloading(let percent) = state {
+            progressBar.isHidden = false
+            progressBar.doubleValue = Double(percent)
+        } else {
+            progressBar.isHidden = true
         }
         installButton.isEnabled = manifest != nil
         let busy: Bool

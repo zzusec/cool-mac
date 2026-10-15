@@ -113,6 +113,21 @@ final class Guardian: @unchecked Sendable {
                     leaseUntil = ContinuousClock.now + 5
                     if let enhancement = request.enhancement { requestedEnhancement = enhancement }
                     send(WorkerCommand(operation: .renew, enhancement: request.enhancement, deadline: min(leaseUntil, ContinuousClock.now + 3)))
+                case .installUpdate:
+                    // The already-privileged daemon applies the update, so the
+                    // user is not asked for a password on every release. Nothing
+                    // is trusted from the caller: only a canonical UUID crosses
+                    // this boundary, and the install tool re-verifies the signed
+                    // manifest, the digest and the version before touching /.
+                    guard let identifier = request.updateID else { throw HardwareError("缺少更新标识") }
+                    guard ownerSession == nil, requestedMode == .system, leaseUntil <= ContinuousClock.now else {
+                        throw HardwareError("风扇仍在接管中，先交还系统自动再安装更新")
+                    }
+                    guard status.phase == .system || status.phase == .monitoring else {
+                        throw HardwareError("当前状态不允许安装更新：\(status.phase.rawValue)")
+                    }
+                    try launchInstaller(identifier: identifier)
+                    status.message = "后台已开始安装更新；界面会等待新版本出现"
                 }
                 return response(ok: true)
             } catch { return response(ok: false, error: error.localizedDescription) }
@@ -282,6 +297,61 @@ final class Guardian: @unchecked Sendable {
                 send(WorkerCommand(operation: .sample))
             }
         }
+    }
+
+    /// Runs the fixed, root-owned install tool in its own session so it survives
+    /// this daemon being booted out by the package's own preinstall step.
+    private func launchInstaller(identifier: String) throws {
+        let tool = Product.installToolPath
+        var info = stat()
+        guard lstat(tool, &info) == 0, info.st_uid == 0,
+              info.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG), info.st_mode & 0o022 == 0 else {
+            throw HardwareError("更新安装工具不可信：\(tool)")
+        }
+        // The user must be able to read why an update failed without root, so the
+        // child's output goes next to the staged package. O_NOFOLLOW keeps a
+        // planted symlink from redirecting a root write.
+        let log = Product.updateCacheDirectoryAbsolute + "/" + identifier + ".log"
+        var actions: posix_spawn_file_actions_t?
+        posix_spawn_file_actions_init(&actions)
+        defer { posix_spawn_file_actions_destroy(&actions) }
+        posix_spawn_file_actions_addopen(&actions, 0, "/dev/null", O_RDONLY, 0)
+        posix_spawn_file_actions_addopen(&actions, 1, log, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0o644)
+        posix_spawn_file_actions_addopen(&actions, 2, log, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0o644)
+
+        var attributes: posix_spawnattr_t?
+        posix_spawnattr_init(&attributes)
+        defer { posix_spawnattr_destroy(&attributes) }
+        posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_SETSID))
+
+        // Every argument must come from withCString: a pointer obtained by
+        // implicitly bridging a Swift String is only valid for that one call and
+        // would reach posix_spawn dangling.
+        var pid: pid_t = 0
+        let status = identifier.withCString { argument in
+            tool.withCString { path in
+                "CoolMacInstallTool".withCString { name in
+                    "--install".withCString { option in
+                        var argv: [UnsafeMutablePointer<CChar>?] = [
+                            UnsafeMutablePointer(mutating: name),
+                            UnsafeMutablePointer(mutating: option),
+                            UnsafeMutablePointer(mutating: argument),
+                            nil,
+                        ]
+                        return posix_spawn(&pid, path, &actions, &attributes, &argv, environ)
+                    }
+                }
+            }
+        }
+        guard status == 0 else {
+            let note = "后台无法启动更新安装工具：posix_spawn errno \(status)\n"
+            try? note.write(toFile: log, atomically: true, encoding: .utf8)
+            _ = chmod(log, 0o644)
+            throw HardwareError("无法启动更新安装工具（errno \(status)）")
+        }
+        // The daemon runs with umask 077, so the mode requested above is masked
+        // down to 0600. The log is meant to be readable by the desktop user.
+        _ = chmod(log, 0o644)
     }
 
     func shutdown() {

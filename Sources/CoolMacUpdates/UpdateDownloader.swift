@@ -24,8 +24,13 @@ public struct UpdateDownloader: Sendable {
     }
 
     /// Downloads and verifies `manifest`'s asset, returning the file it wrote
-    /// inside `directory`.
-    public func download(_ manifest: UpdateManifest, into directory: URL) async throws -> URL {
+    /// inside `directory`. `progress` receives (received, expected) byte counts;
+    /// `expected` is negative when the server did not announce a length.
+    public func download(
+        _ manifest: UpdateManifest,
+        into directory: URL,
+        progress: (@Sendable (Int, Int64) -> Void)? = nil
+    ) async throws -> URL {
         try UpdateSource.validateInitialHost(manifest.assetURL)
         guard manifest.assetBytes > 0 else {
             throw UpdateError.invalidManifestJSON("assetBytes 必须为正整数：\(manifest.assetBytes)")
@@ -48,10 +53,11 @@ public struct UpdateDownloader: Sendable {
 
         let data: Data
         do {
-            let (payload, response) = try await transport.data(
+            let (payload, response) = try await transport.download(
                 from: manifest.assetURL,
                 byteLimit: manifest.assetBytes,
-                timeout: timeout
+                timeout: timeout,
+                progress: progress ?? { _, _ in }
             )
             try UpdateHTTP.validate(response)
             data = payload

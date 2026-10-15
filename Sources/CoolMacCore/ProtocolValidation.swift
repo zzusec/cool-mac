@@ -7,6 +7,9 @@ public enum ProtocolValidationError: LocalizedError, Equatable, Sendable {
     case unexpectedMode(RequestOperation)
     case invalidEnhancement(Int)
     case unexpectedEnhancement(RequestOperation)
+    case missingUpdateID
+    case invalidUpdateID
+    case unexpectedUpdateID(RequestOperation)
 
     public var errorDescription: String? {
         switch self {
@@ -22,6 +25,12 @@ public enum ProtocolValidationError: LocalizedError, Equatable, Sendable {
             "增强档位 \(value) 无效；只接受关闭或 10…\(Enhancement.maximumPercent) 之间的 10 的倍数。"
         case .unexpectedEnhancement(let operation):
             "\(operation.rawValue) 请求不允许携带增强档位；只有 select 和 renew 可以设置。"
+        case .missingUpdateID:
+            "installUpdate 请求必须携带已暂存更新的规范 UUID。"
+        case .invalidUpdateID:
+            "updateID 必须是规范的小写 UUID。"
+        case .unexpectedUpdateID(let operation):
+            "\(operation.rawValue) 请求不允许携带 updateID；只有 installUpdate 可以。"
         }
     }
 }
@@ -45,9 +54,15 @@ public enum ProtocolValidation {
         switch request.operation {
         case .select:
             guard request.mode != nil else { throw ProtocolValidationError.missingMode }
+            guard request.updateID == nil else {
+                throw ProtocolValidationError.unexpectedUpdateID(request.operation)
+            }
         case .renew:
             guard request.mode == nil else {
                 throw ProtocolValidationError.unexpectedMode(request.operation)
+            }
+            guard request.updateID == nil else {
+                throw ProtocolValidationError.unexpectedUpdateID(request.operation)
             }
         case .status, .restore, .commission:
             guard request.mode == nil else {
@@ -55,6 +70,22 @@ public enum ProtocolValidation {
             }
             guard request.enhancement == nil else {
                 throw ProtocolValidationError.unexpectedEnhancement(request.operation)
+            }
+            guard request.updateID == nil else {
+                throw ProtocolValidationError.unexpectedUpdateID(request.operation)
+            }
+        case .installUpdate:
+            guard request.mode == nil else {
+                throw ProtocolValidationError.unexpectedMode(request.operation)
+            }
+            guard request.enhancement == nil else {
+                throw ProtocolValidationError.unexpectedEnhancement(request.operation)
+            }
+            guard let identifier = request.updateID else {
+                throw ProtocolValidationError.missingUpdateID
+            }
+            guard let uuid = UUID(uuidString: identifier), uuid.uuidString.lowercased() == identifier else {
+                throw ProtocolValidationError.invalidUpdateID
             }
         }
     }
