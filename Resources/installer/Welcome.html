@@ -1,0 +1,11 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>安装清凉风扇</title>
+<style>body{font:14px -apple-system,sans-serif;color:#222;line-height:1.6;margin:24px}h1{font-size:22px}code{font-size:12px;word-break:break-all}</style></head>
+<body><h1>清凉风扇</h1>
+<p>适用于 Apple Silicon（arm64）、macOS 14 或更新系统。原生右上角菜单栏工具，不占 Dock；当前硬件支持以本机安全自检为准。</p>
+<p>此安装包会把应用安装到 <code>/Applications/清凉风扇.app</code>，并通过 macOS Installer 的系统管理员授权安装 root-owned 后台组件。无需修改 SIP、sudoers 或收集密码。</p>
+<p>后台默认仅监测，不自动启用风扇控制。首次打开后，请先退出其他风扇控制工具，再自行点击「设置 → 安全自检…」。升级会先由已安装的可信后台确认系统自动恢复，再替换组件。</p>
+<p>更积极散热会增加风扇噪声和电池消耗，不能保证机身不发烫；显示的是芯片温度，不是机身表面温度。</p>
+<p><strong>这是本地构建的候选版本，使用 ad-hoc 签名与 Hardened Runtime，未经过 Apple 公证，也不具有 Developer ID / Installer 证书签名；不是 Apple 官方软件。</strong> 如被 macOS 阻止，请只在确认来源后，通过系统设置「隐私与安全性」中的系统选项允许打开，不要关闭系统安全机制。</p>
+<p>控制授权固定为本机 UID 501，仅允许当前登录桌面用户使用最终签名的 GUI / CLI。安装不会以 root 启动 GUI。</p>
+</body></html>

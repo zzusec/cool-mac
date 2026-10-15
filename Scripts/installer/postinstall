@@ -1,0 +1,100 @@
+#!/bin/bash -p
+set -euo pipefail
+export PATH=/usr/bin:/bin:/usr/sbin:/sbin
+export LC_ALL=C
+umask 077
+unset BASH_ENV ENV CDPATH DYLD_INSERT_LIBRARIES DYLD_LIBRARY_PATH DYLD_FRAMEWORK_PATH
+fail() { printf '清凉风扇安装后检查失败：%s\n' "$*" >&2; exit 1; }
+[[ "$EUID" -eq 0 ]] || fail '必须由 macOS Installer 管理员授权执行。'
+[[ "${3:-}" == '/' ]] || fail '只允许安装到当前启动卷 /，不支持离线卷。'
+HELPER='/Library/PrivilegedHelperTools/local.hx10.coolmac.helper'
+INSTALL_TOOL='/Library/PrivilegedHelperTools/local.hx10.coolmac.install'
+MANIFEST='/Library/Application Support/CoolMac/identity.plist'
+DAEMON='/Library/LaunchDaemons/local.hx10.coolmac.helper.plist'
+APP='/Applications/清凉风扇.app'
+
+assert_no_acl() {
+    local listing first mode
+    listing="$(/bin/ls -lde "$1")" || fail "不能读取 ACL：$1"
+    first="${listing%%$'\n'*}"
+    mode="${first%% *}"
+    [[ "$mode" != *+* ]] || fail "存在扩展 ACL：$1"
+}
+assert_dir() {
+    local path="$1" uid permissions
+    [[ -d "$path" && ! -L "$path" ]] || fail "父路径不是普通目录：$path"
+    uid="$(/usr/bin/stat -f '%u' "$path")"
+    permissions="$(/usr/bin/stat -f '%Lp' "$path")"
+    [[ "$uid" == '0' && "$permissions" =~ ^[0-7]{3,4}$ ]] || fail "目录必须 root-owned：$path"
+    (( (8#$permissions & 8#22) == 0 )) || fail "目录允许非 root 写入：$path"
+    assert_no_acl "$path"
+}
+assert_file() {
+    local path="$1" permissions="$2"
+    [[ -f "$path" && ! -L "$path" ]] || fail "不是普通文件：$path"
+    [[ "$(/usr/bin/stat -f '%u:%g:%Lp:%l' "$path")" == "0:0:$permissions:1" ]] || fail "必须 root:wheel、权限 $permissions、单硬链接：$path"
+    assert_no_acl "$path"
+}
+cdhash() {
+    local details line hash='' count=0
+    details="$(/usr/bin/codesign -d --verbose=4 --arch arm64 "$1" 2>&1)" || fail "不能读取签名：$1"
+    while IFS= read -r line; do
+        case "$line" in CDHash=*) hash="${line#CDHash=}"; count=$((count + 1)) ;; esac
+    done <<< "$details"
+    [[ "$count" -eq 1 && "$hash" =~ ^[0-9a-fA-F]{40}$ ]] || fail "没有唯一 arm64 CDHash：$1"
+    printf '%s\n' "$hash"
+}
+for directory in '/' '/Library' '/Library/PrivilegedHelperTools' '/Library/Application Support' \
+    '/Library/Application Support/CoolMac' '/Library/LaunchDaemons'; do
+    assert_dir "$directory"
+done
+assert_file "$HELPER" 755
+assert_file "$INSTALL_TOOL" 755
+assert_file "$MANIFEST" 644
+assert_file "$DAEMON" 644
+# /Applications normally permits the admin group to install apps. Do not change it.
+[[ -d '/Applications' && ! -L '/Applications' && "$(/usr/bin/stat -f '%u' '/Applications')" == '0' ]] || fail 'Applications 不是 root-owned 普通目录。'
+[[ -d "$APP" && ! -L "$APP" ]] || fail '安装后的 app 缺失或为符号链接。'
+entries="$(/usr/bin/find "$APP" -print)" || fail '无法枚举安装后的 app。'
+while IFS= read -r entry; do
+    [[ ! -L "$entry" ]] || fail "app 含符号链接：$entry"
+    if [[ -d "$entry" ]]; then
+        assert_dir "$entry"
+        [[ "$(/usr/bin/stat -f '%g:%Lp' "$entry")" == '0:755' ]] || fail "app 目录必须 wheel:755：$entry"
+    else
+        case "$entry" in
+            "$APP/Contents/MacOS/CoolMac"|"$APP/Contents/Helpers/CoolMacHelper"|"$APP/Contents/Helpers/coolmacctl"|"$APP/Contents/Helpers/CoolMacInstallTool") assert_file "$entry" 755 ;;
+            *) assert_file "$entry" 644 ;;
+        esac
+    fi
+done <<< "$entries"
+/usr/bin/plutil -lint "$MANIFEST" "$DAEMON" "$APP/Contents/Info.plist"
+[[ "$(/usr/bin/plutil -extract authorizedUID raw -o - "$MANIFEST")" == '501' ]] || fail 'authorizedUID 必须为 501。'
+[[ "$(/usr/bin/plutil -extract clientCDHashes.0 raw -o - "$MANIFEST")" == "$(cdhash "$APP")" ]] || fail 'GUI 身份与 manifest 不一致。'
+[[ "$(/usr/bin/plutil -extract cliCDHashes.0 raw -o - "$MANIFEST")" == "$(cdhash "$APP/Contents/Helpers/coolmacctl")" ]] || fail 'CLI 身份与 manifest 不一致。'
+[[ "$(/usr/bin/plutil -extract Label raw -o - "$DAEMON")" == 'local.hx10.coolmac.helper' ]] || fail 'LaunchDaemon label 不匹配。'
+[[ "$(/usr/bin/plutil -extract ProgramArguments.0 raw -o - "$DAEMON")" == "$HELPER" ]] || fail 'LaunchDaemon helper 路径不匹配。'
+[[ "$(/usr/bin/plutil -extract ProgramArguments.1 raw -o - "$DAEMON")" == '--daemon' ]] || fail 'LaunchDaemon 操作不匹配。'
+for binary in "$HELPER" "$INSTALL_TOOL" "$APP/Contents/MacOS/CoolMac" "$APP/Contents/Helpers/CoolMacHelper" "$APP/Contents/Helpers/coolmacctl" "$APP/Contents/Helpers/CoolMacInstallTool"; do
+    /usr/bin/codesign --verify --strict --verbose=2 "$binary"
+    details="$(/usr/bin/codesign -d --verbose=4 --arch arm64 "$binary" 2>&1)" || fail "不能检查 Hardened Runtime：$binary"
+    /usr/bin/grep -E '^CodeDirectory .*flags=.*runtime' <<< "$details" >/dev/null || fail "缺少 Hardened Runtime：$binary"
+    entitlements="$(/usr/bin/codesign -d --entitlements - "$binary")" || fail "不能检查 entitlements：$binary"
+    [[ -z "$entitlements" ]] || fail "拒绝额外 entitlements：$binary"
+done
+/usr/bin/codesign --verify --deep --strict --verbose=2 "$APP"
+[[ "$(cdhash "$HELPER")" == "$(cdhash "$APP/Contents/Helpers/CoolMacHelper")" ]] || fail '安装 helper 与 app 内 helper 不一致。'
+[[ "$(cdhash "$INSTALL_TOOL")" == "$(cdhash "$APP/Contents/Helpers/CoolMacInstallTool")" ]] || fail '安装的更新工具与 app 内不一致。'
+
+# Installer's normal administrator authorization is sufficient. Do not open GUI as root,
+# prompt for passwords, use sudo, or execute binaries/scripts from the project or DMG.
+if [[ -e '/var/db/CoolMac/recovery-upgrade' || -L '/var/db/CoolMac/recovery-upgrade' ]]; then
+    assert_dir '/var/db/CoolMac'
+    assert_file '/var/db/CoolMac/recovery-upgrade' 600
+    assert_file '/var/db/CoolMac/armed' 600
+    "$HELPER" --recover-worker || fail '新恢复组件仍未确认系统自动；后台保持停止，保留恢复日志。'
+    /bin/rm '/var/db/CoolMac/recovery-upgrade'
+    printf '修复组件已确认恢复系统自动；现在允许启动后台。\n'
+fi
+"$HELPER" --install-service
+printf '安装成功；后台默认仅监测。请结束 Installer 后，以桌面用户打开 /Applications/清凉风扇.app，并自行点击安全自检。\n'
