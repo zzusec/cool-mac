@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key><string>local.hx10.coolmac.helper</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Library/PrivilegedHelperTools/local.hx10.coolmac.helper</string>
+        <string>--daemon</string>
+    </array>
+    <key>MachServices</key>
+    <dict><key>local.hx10.coolmac.helper</key><true/></dict>
+    <key>UserName</key><string>root</string>
+    <key>GroupName</key><string>wheel</string>
+    <key>RunAtLoad</key><true/>
+    <key>KeepAlive</key><true/>
+    <key>ProcessType</key><string>Interactive</string>
+    <key>ExitTimeOut</key><integer>12</integer>
+    <key>ThrottleInterval</key><integer>5</integer>
+    <key>Umask</key><integer>63</integer>
+</dict>
+</plist>

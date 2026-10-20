@@ -1,0 +1,76 @@
+#!/bin/bash -p
+set -euo pipefail
+export PATH=/usr/bin:/bin:/usr/sbin:/sbin
+export LC_ALL=C
+umask 077
+unset BASH_ENV ENV CDPATH DYLD_INSERT_LIBRARIES DYLD_LIBRARY_PATH DYLD_FRAMEWORK_PATH
+fail() { printf '清凉风扇安装前检查失败：%s\n' "$*" >&2; exit 1; }
+[[ "$EUID" -eq 0 ]] || fail '必须由 macOS Installer 管理员授权执行。'
+[[ "${3:-}" == '/' ]] || fail '只允许安装到当前启动卷 /，不支持离线卷。'
+HELPER='/Library/PrivilegedHelperTools/local.hx10.coolmac.helper'
+MANIFEST='/Library/Application Support/CoolMac/identity.plist'
+DAEMON='/Library/LaunchDaemons/local.hx10.coolmac.helper.plist'
+
+assert_no_acl() {
+    local listing first mode
+    listing="$(/bin/ls -lde "$1")" || fail "不能读取 ACL：$1"
+    first="${listing%%$'\n'*}"
+    mode="${first%% *}"
+    [[ "$mode" != *+* ]] || fail "存在扩展 ACL，拒绝执行或覆盖：$1"
+}
+assert_dir() {
+    local path="$1" uid permissions
+    [[ -d "$path" && ! -L "$path" ]] || fail "父路径不是普通目录：$path"
+    uid="$(/usr/bin/stat -f '%u' "$path")"
+    permissions="$(/usr/bin/stat -f '%Lp' "$path")"
+    [[ "$uid" == '0' && "$permissions" =~ ^[0-7]{3,4}$ ]] || fail "父目录必须 root-owned：$path"
+    (( (8#$permissions & 8#22) == 0 )) || fail "父目录允许非 root 写入：$path"
+    assert_no_acl "$path"
+}
+assert_file() {
+    local path="$1" permissions="$2"
+    [[ -f "$path" && ! -L "$path" ]] || fail "不是普通文件：$path"
+    [[ "$(/usr/bin/stat -f '%u:%g:%Lp:%l' "$path")" == "0:0:$permissions:1" ]] || fail "必须 root:wheel、权限 $permissions、单硬链接：$path"
+    assert_no_acl "$path"
+}
+# Never chmod/chown global directories, follow symlinks, or execute project/DMG binaries.
+assert_dir '/'
+assert_dir '/Library'
+for directory in '/Library/PrivilegedHelperTools' '/Library/Application Support' \
+    '/Library/Application Support/CoolMac' '/Library/LaunchDaemons'; do
+    if [[ -e "$directory" || -L "$directory" ]]; then assert_dir "$directory"; fi
+done
+if [[ -e "$MANIFEST" || -L "$MANIFEST" ]]; then assert_file "$MANIFEST" 644; fi
+if [[ -e "$DAEMON" || -L "$DAEMON" ]]; then assert_file "$DAEMON" 644; fi
+[[ ! -L '/Applications' && ! -L '/Applications/清凉风扇.app' ]] || fail 'Applications 或目标 app 是符号链接。'
+
+if [[ -e "$HELPER" || -L "$HELPER" ]]; then
+    # All ancestors and the immutable file are checked before executing the fixed installed path.
+    assert_dir '/Library/PrivilegedHelperTools'
+    assert_dir '/Library/Application Support'
+    assert_dir '/Library/Application Support/CoolMac'
+    assert_file "$HELPER" 755
+    assert_file "$MANIFEST" 644
+    /usr/bin/codesign --verify --strict --verbose=2 "$HELPER"
+    if "$HELPER" --prepare-upgrade; then
+        printf '既有后台已停止，自动恢复已由已安装 helper 确认；继续升级。\n'
+    else
+        # A broken old recovery implementation cannot be the only way to install
+        # its repair. Replace it only after the old service and all workers stop,
+        # preserving a protected ownership journal for the new recovery code.
+        if /bin/launchctl print system/local.hx10.coolmac.helper >/dev/null 2>&1; then fail '旧服务仍在运行，禁止替换恢复组件。'; fi
+        if /usr/bin/pgrep -f '^/Library/PrivilegedHelperTools/local.hx10.coolmac.helper( |$)' >/dev/null; then
+            fail '旧控制进程仍在运行，禁止替换恢复组件。'
+        else
+            [[ "$?" -eq 1 ]] || fail '无法确认旧控制进程已停止。'
+        fi
+        assert_dir '/var/db/CoolMac'
+        assert_file '/var/db/CoolMac/armed' 600
+        [[ ! -L '/var/db/CoolMac/recovery-upgrade' ]] || fail '恢复升级标记不安全。'
+        printf '%s' 'Recover the preserved owned override before starting service.' > '/var/db/CoolMac/recovery-upgrade'
+        /bin/chmod 600 '/var/db/CoolMac/recovery-upgrade'
+        printf '旧恢复实现未确认成功；已停止旧进程，保留所有权日志，新组件必须先完成恢复，才允许启动服务。\n'
+    fi
+else
+    printf '首次安装，没有既有 helper；继续安装。\n'
+fi

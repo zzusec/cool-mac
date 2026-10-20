@@ -1,0 +1,17 @@
+.build/
+.swiftpm/
+dist/
+.DS_Store
+*.dSYM/
+
+# Local validation records and credentials are not part of the public source.
+VALIDATION.md
+VALIDATION.html
+.env
+.env.*
+*.p12
+*.pfx
+*.pem
+*.key
+*.keychain
+*.keychain-db
