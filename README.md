@@ -78,4 +78,4 @@ DEVELOPER_DIR=/Library/Developer/CommandLineTools swift build -c release --arch 
 
 ## 许可
 
-第三方参考及其 MIT 许可见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。项目自身的开源许可证尚未选定；公开源码不等于已授予第三方参考之外的 MIT 或其他通用许可。
+本项目采用 [MIT License](LICENSE) 开源。第三方参考及其 MIT 许可见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)；原有版权与许可声明予以保留。
