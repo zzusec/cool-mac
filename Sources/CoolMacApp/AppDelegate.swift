@@ -156,7 +156,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         automaticUpdateItem.target = self
         automaticUpdateItem.toolTip = "启动后及每 6 小时检查，验证后自动安装并重启"
         settings.addItem(automaticUpdateItem)
-        _ = add("查看详情…", action: #selector(showHelp), to: settings)
         updateItem.title = "检查更新…"
         updateItem.action = #selector(showUpdate)
         updateItem.target = self
