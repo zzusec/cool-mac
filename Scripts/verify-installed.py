@@ -70,6 +70,27 @@ def root_signal(pid, name, pause=False):
     return subprocess.Popen(["/usr/bin/osascript", "-e", source], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
 
 
+def root_signal_pair(daemon_pid, worker_pid):
+    """SIGKILL the daemon and its worker together, the way a system shutdown, an
+    OS upgrade or a power loss does. The worker goes first so it cannot react to
+    the daemon's death, and the daemon follows before its exit handler can record
+    a fault: what survives is the bare ownership journal.
+    """
+    for pid in (daemon_pid, worker_pid):
+        if not isinstance(pid, int) or pid <= 1:
+            raise ValueError("非法测试目标")
+    quoted = "'" + HELPER + "'"
+    checks = "; ".join(
+        f'test "$(/bin/ps -p {pid} -o comm=)" = {quoted} || exit 1' for pid in (worker_pid, daemon_pid))
+    # One authorized action: kill both, then report whether the ownership journal
+    # survived. launchd's ThrottleInterval is 5s, so nothing has restarted yet.
+    script = (f'{checks}; /bin/kill -KILL {worker_pid}; /bin/kill -KILL {daemon_pid}; '
+              '/bin/sleep 1; if test -e /var/db/CoolMac/armed; then echo ARMED-LEFT-BEHIND; '
+              'else echo ARMED-ABSENT; fi')
+    source = "do shell script " + json.dumps(script) + " with administrator privileges"
+    return subprocess.Popen(["/usr/bin/osascript", "-e", source], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+
+
 def wait_manual(timeout=8):
     end = time.monotonic() + timeout
     while time.monotonic() < end:
@@ -123,6 +144,68 @@ def fault_case(kind):
             output, _ = injector.communicate(timeout=130)
             if injector.returncode:
                 print("授权操作失败：", output, flush=True)
+        try:
+            command("restore")
+        except (subprocess.SubprocessError, ValueError) as error:
+            print("恢复请求暂未返回：", error, flush=True)
+        wait_automatic(timeout=15)
+
+
+def journal_orphan_case():
+    """A leftover ownership journal with no recorded fault must not latch.
+
+    This is the shape a system shutdown, an OS upgrade or a power loss leaves
+    behind: the controller dies before its handshake and nothing records a fault.
+    Releasing the fans and verifying the readback is the whole recovery, so the
+    next start must not demand a fresh safety check for it. The check asserts its
+    own precondition first — that the journal really survived the kill — so it
+    cannot pass by accident.
+    """
+    print("CASE journal-orphan", flush=True)
+    commission()
+    # A cool machine does not need cooling, so a plain 凉爽自动 selection stays in
+    # system automatic and never takes ownership. A non-zero step forces a target
+    # above the system's own, which is what writes the ownership journal.
+    process = subprocess.Popen([CLI, "cool", "--seconds", "20", "--enhancement", "20"],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    injector = None
+    try:
+        current = wait_manual()
+        print("before:", json.dumps(current["snapshot"]["fans"], ensure_ascii=False), flush=True)
+        injector = root_signal_pair(current["guardianPID"], current["workerPID"])
+        output, _ = injector.communicate(timeout=120)
+        if injector.returncode:
+            raise RuntimeError("系统信号授权/执行失败：" + output)
+        if "ARMED-LEFT-BEHIND" not in output:
+            raise RuntimeError("强杀后没有留下所有权日志，本用例的前提不成立：" + output)
+        # Only the restarted background can release the fans, so this also proves
+        # the new session took over and handed them back to the system.
+        wait_automatic(timeout=40)
+        end = time.monotonic() + 30
+        current = None
+        while time.monotonic() < end:
+            try:
+                current = status()
+                break
+            except (subprocess.SubprocessError, ValueError):
+                current = None
+            time.sleep(0.5)
+        if current is None:
+            raise RuntimeError("强杀后后台没有在超时内重新响应")
+        print("after:", json.dumps(current, ensure_ascii=False), flush=True)
+        if current["phase"] == "fault":
+            raise RuntimeError("中断后的启动被当成控制故障闭锁：" + current["message"])
+        if not current["commissioned"]:
+            raise RuntimeError("中断后的启动丢掉了已通过的安全自检")
+        print("PASS journal-orphan", flush=True)
+    finally:
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
         try:
             command("restore")
         except (subprocess.SubprocessError, ValueError) as error:
@@ -208,7 +291,8 @@ def enhancement_case(step):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--allow-fault-tests", action="store_true")
-    parser.add_argument("--case", choices=["client-kill", "worker-kill", "worker-pause", "guardian-kill", "guardian-pause", "enhancement"])
+    parser.add_argument("--case", choices=["client-kill", "worker-kill", "worker-pause", "guardian-kill", "guardian-pause",
+                                           "journal-orphan", "enhancement"])
     parser.add_argument("--enhancement-step", type=int, default=30)
     args = parser.parse_args()
     if os.geteuid() == 0 or os.getuid() != 501 or not args.allow_fault_tests:
@@ -220,6 +304,11 @@ def main():
             raise SystemExit("--enhancement-step 必须是 10…80 的 10 的倍数。")
         enhancement_case(args.enhancement_step)
         print("增强档位检查通过；已交还系统自动。", flush=True)
+        return
+    if args.case == "journal-orphan":
+        journal_orphan_case()
+        commission()
+        print("中断恢复检查通过；已交还系统自动。", flush=True)
         return
     for kind in [args.case] if args.case else ["client-kill", "worker-kill", "worker-pause", "guardian-kill", "guardian-pause"]:
         fault_case(kind)
