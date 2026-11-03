@@ -284,6 +284,11 @@ final class Guardian: @unchecked Sendable {
     }
 
     private func supervise() {
+        // Shutdown only waits for the worker's own release handshake, which
+        // shutdown() already drives. The liveness watchdog must stay out of the
+        // way here: a worker that is slow to exit would be killed mid-release
+        // and would persist a fault claiming the hardware stalled.
+        guard !shutdownRequested else { return }
         // Two clocks on purpose: liveness must ignore sleep (a sleeping Mac is
         // not a stalled worker), while a control lease must expire across sleep
         // so no takeover silently resumes after wake.

@@ -31,19 +31,27 @@ final class Worker {
         lockFD = descriptor
         hardware = try FanHardware(discoverSensors: !recoveryOnly)
         status.workerPID = getpid()
+        // Read the durable state before recovery runs. A leftover ownership
+        // journal means the previous controller was terminated without its
+        // shutdown handshake, which is routine (system shutdown, OS upgrade,
+        // power loss). Release the fans and verify the readback; only a fault
+        // the previous session recorded keeps the takeover lock.
+        let startup = StartupJournal.condition(
+            hasOwnershipJournal: hasState("armed"),
+            hasRecordedFault: hasState("fault")
+        )
         if hasState("armed") {
             try restore()
-            try putState("fault", text: "上次控制进程中断，已恢复系统自动；需要重新安全自检")
-            status.message = "上次遗留控制已恢复系统自动"
+            status.message = StartupJournal.interruptedMessage
         }
         if recoveryOnly { initialized = true; return }
         let snapshot = try hardware.sample()
         status.snapshot = snapshot
         automaticConfirmed = snapshot.fans.allSatisfy { !$0.manual }
         status.commissioned = (try? String(contentsOfFile: statePath("commissioned"), encoding: .utf8)) == fingerprint(snapshot)
-        if hasState("fault") {
+        if startup == .faulted {
             status.phase = .fault
-            status.message = "上次控制发生故障；已停止接管，请先恢复再重新安全自检"
+            status.message = StartupJournal.faultMessage(recorded: try? String(contentsOfFile: statePath("fault"), encoding: .utf8))
         }
         if snapshot.fans.contains(where: \.manual) {
             status.phase = .fault

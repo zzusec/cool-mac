@@ -475,7 +475,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard !updating, !quitting else { return }
         let alert = NSAlert()
         alert.messageText = "验证风扇升速与自动恢复"
-        alert.informativeText = "风扇将短时加速约 6 秒，然后检查是否恢复系统自动。请先退出 Macs Fan Control、Stats 或其他风扇控制工具。\n\n自检通过后将启用凉爽自动。更早散热会增加风扇声音和耗电，无法保证持续高负载时机身不热。"
+        let steps = "风扇将短时加速约 6 秒，然后检查是否恢复系统自动。请先退出 Macs Fan Control、Stats 或其他风扇控制工具。\n\n自检通过后将启用凉爽自动。更早散热会增加风扇声音和耗电，无法保证持续高负载时机身不热。"
+        // A latched fault is only actionable if the dialog says what latched it.
+        alert.informativeText = status.phase == .fault ? "\(status.message)\n\n\(steps)" : steps
         alert.addButton(withTitle: "开始安全自检")
         alert.addButton(withTitle: "取消")
         NSApp.activate(ignoringOtherApps: true)
