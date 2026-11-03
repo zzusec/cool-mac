@@ -2,9 +2,9 @@ import Foundation
 
 public enum Product {
     public static let name = "清凉风扇"
-    public static let version = "1.1.24"
+    public static let version = "1.1.25"
     /// Monotonic build number for update comparison. Never reused or decreased.
-    public static let build = 29
+    public static let build = 30
     public static let bundleID = "local.hx10.coolmac"
     public static let service = "local.hx10.coolmac.helper"
     public static let helperPath = "/Library/PrivilegedHelperTools/local.hx10.coolmac.helper"

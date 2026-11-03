@@ -1,6 +1,6 @@
 # 清凉风扇
 
-当前版本 **1.1.24（构建 27）**；可在「设置」查看版本，在「检查更新…」窗口查看版本与构建号。
+当前版本 **1.1.25（构建 30）**；可在「设置」查看版本，在「检查更新…」窗口查看版本与构建号。
 
 本仓库公开应用源码、测试和构建脚本；安装包与签名更新清单通过 [Releases](https://github.com/zzusec/cool-mac/releases) 分发。构建产物、本机诊断记录及签名私钥不入库。
 
@@ -29,7 +29,7 @@ Apple Silicon 没有「系统目标 + 偏移」接口，本程序只能接管风
 发布新版本（本机执行，私钥只存在登录钥匙串，不进入仓库）：
 
 ```sh
-Scripts/release.sh --version 1.1.24 --build 27 --notes <文件>
+Scripts/release.sh --version 1.1.25 --build 30 --notes <文件>
 ```
 
 脚本会用本机的 Apple Development 证书重新签名发布工具，使钥匙串把它认作同一个程序；否则 ad-hoc 签名让工具的身份等于内容哈希，每次重建都会再弹一次授权。第一次读取私钥时点「始终允许」即可长期生效。若本机没有可用证书，可用 `COOLMAC_SIGNING_IDENTITY` 指定，或接受每次重建都弹窗。
@@ -57,7 +57,7 @@ DEVELOPER_DIR=/Library/Developer/CommandLineTools Scripts/test-core.sh
 DEVELOPER_DIR=/Library/Developer/CommandLineTools swift build -c release --arch arm64 --jobs 2
 ```
 
-纯测试不安装后台、不启动 GUI、不写风扇。当前 203 项测试通过；构建成功不代表其他硬件已经验证。
+纯测试不安装后台、不启动 GUI、不写风扇。当前 210 项测试通过；构建成功不代表其他硬件已经验证。
 
 当前安装及发布流程仍为原始发布机设计：打包路径固定为 `/Users/hx10/cool-mac`，更新缓存路径及授权 UID 也有本机约束。克隆到其他目录可运行纯测试和 SwiftPM 构建，但不能据此直接运行本机专用打包、安装或发布流程；这些约束尚未通用化。仓库包含更新验签公钥，不包含发布私钥。
 
