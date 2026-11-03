@@ -206,11 +206,9 @@ final class Guardian: @unchecked Sendable {
                     status.message = event.restored ? "已恢复系统自动；\(previousError)" : "\(previousError)；恢复未确认"
                     status.commissioned = false
                 }
-                if status.phase == .fault || event.commissioningCompleted {
-                    requestedMode = .system
-                    leaseUntil = 0
-                    ownerSession = nil
-                }
+                (requestedMode, leaseUntil, ownerSession) = LeaseHandoff.receive(
+                    phase: status.phase, commissioningCompleted: event.commissioningCompleted,
+                    current: (requestedMode, leaseUntil, ownerSession))
             }
         } catch { interruptWorker("硬件进程响应无效：\(error.localizedDescription)") }
     }

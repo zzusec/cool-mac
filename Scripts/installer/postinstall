@@ -97,4 +97,4 @@ if [[ -e '/var/db/CoolMac/recovery-upgrade' || -L '/var/db/CoolMac/recovery-upgr
     printf '修复组件已确认恢复系统自动；现在允许启动后台。\n'
 fi
 "$HELPER" --install-service
-printf '安装成功；后台默认仅监测。请结束 Installer 后，以桌面用户打开 /Applications/清凉风扇.app，并自行点击安全自检。\n'
+printf '安装成功；安装器未接管风扇。请结束 Installer 后，以桌面用户打开 /Applications/清凉风扇.app。GUI 首次正常轮询后，若后台正常、硬件受支持且读数新鲜、尚未自检且无锁定故障，应用会自动进行一次约 6 秒的安全验证，短时升速并确认能交还系统；成功后默认启用「凉爽自动」，已选择「系统自动」的偏好保留。其他风扇工具或控制器冲突会明确报错并拒绝争用，不自动退出其他应用；异常时交还系统，不反复自动重试，可通过「设置 → 安全自检…」手动恢复。\n'

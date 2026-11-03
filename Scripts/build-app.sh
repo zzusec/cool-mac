@@ -29,6 +29,7 @@ BUILT_APP="$STAGE/$APP_NAME"
 /usr/bin/install -m 755 "$BIN_DIR/coolmacctl" "$BUILT_APP/Contents/Helpers/coolmacctl"
 /usr/bin/install -m 755 "$BIN_DIR/CoolMacInstallTool" "$BUILT_APP/Contents/Helpers/CoolMacInstallTool"
 /usr/bin/install -m 644 "$ROOT/Resources/使用说明.txt" "$BUILT_APP/Contents/Resources/使用说明.txt"
+/usr/bin/install -m 644 "$ROOT/Resources/使用说明.html" "$BUILT_APP/Contents/Resources/使用说明.html"
 # The background can be installed from the running bundle, so the launchd
 # definition must travel with it instead of only inside the pkg payload.
 /usr/bin/install -m 644 "$ROOT/Resources/$SERVICE.plist" "$BUILT_APP/Contents/Resources/$SERVICE.plist"

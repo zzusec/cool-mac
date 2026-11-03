@@ -21,14 +21,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let client = ServiceClient()
     private let monitor = ReadOnlyMonitor()
     private let session = UUID().uuidString
+    private var selectionID = UUID()
     private var status = ServiceStatus()
     private var timer: Timer?
     private var polling = false
     private var controlling = false
     private var commissioning = false
-    private var initialModeApplied = false
+    private var commissioningMode: CoolingMode = .cool
+    private var controlStartup = ControlStartup()
     private var quitting = false
     private var uiError: String?
+    private var monitoringError: String?
     private var enhancement = 0
     private let enhancementPanel = EnhancementPanelController()
     private let updateCoordinator = UpdateCoordinator()
@@ -178,7 +181,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             enhancement = status.enhancement
             UserDefaults.standard.set(enhancement, forKey: "enhancement")
         }
-        let needsAttention = uiError != nil || status.phase == .fault || status.phase == .unavailable || (status.available && !status.commissioned)
+        let needsAttention = uiError != nil || monitoringError != nil || status.phase == .fault || status.phase == .unavailable || (status.available && !status.commissioned)
         let hasUpdate = updateCoordinator.needsAttention
         noticeItem.isHidden = !needsAttention && !hasUpdate && !commissioning && status.phase != .restoring
         switch status.phase {
@@ -191,8 +194,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 else { noticeItem.title = "有可用更新…" }
             }
             else if commissioning { noticeItem.title = "正在自检…" }
-            else if uiError != nil { noticeItem.title = "需要处理…" }
-            else { noticeItem.title = "尚未启用控制…" }
+            else if uiError != nil || monitoringError != nil { noticeItem.title = "需要处理…" }
+            else if snapshot?.supported == false { noticeItem.title = "当前硬件不支持控制…" }
+            else { noticeItem.title = controlStartup.attempted ? "控制尚未就绪…" : "正在准备风扇控制…" }
         }
         for (mode, entry) in modeItems {
             entry.state = status.selectedMode == mode ? .on : .off
@@ -208,7 +212,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func checkMenuLayout() {
         let phases: [ControlPhase] = [.monitoring, .system, .cooling, .boosting, .restoring, .fault, .unavailable]
-        let notices = ["", "需要处理…", "后台未连接…", "正在恢复…", "正在自检…", "尚未启用控制…", "有可用更新…", "更新未完成…"]
+        let notices = ["", "需要处理…", "后台未连接…", "正在恢复…", "正在自检…", "正在准备风扇控制…", "控制尚未就绪…", "当前硬件不支持控制…", "有可用更新…", "更新未完成…"]
         var widths: [String: CGFloat] = [:]
         for phase in phases {
             for step in Enhancement.steps {
@@ -275,16 +279,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let response = try await client.request(ServiceRequest(operation: .status, session: session))
             guard response.ok else { throw HardwareError(response.error ?? response.status.message) }
             status = response.status
+            if let snapshot = status.snapshot, abs(Date().timeIntervalSince1970 - snapshot.sampledAt) <= 5 {
+                monitoringError = nil
+            }
             guard !updating else { return }
             if commissioning && status.commissioned {
                 commissioning = false
                 controlling = false
-                await choose(.cool)
+                controlStartup.didCompleteCommissioning()
+                if commissioningMode == .cool { await choose(.cool) }
             } else if status.phase == .fault {
                 commissioning = false
                 controlling = false
             } else if controlling && status.selectedMode == .system && status.phase != .restoring {
                 controlling = false
+            }
+            if !commissioning && !controlling && uiError == nil && controlStartup.shouldStart(status: status) {
+                let saved = UserDefaults.standard.string(forKey: "preferredMode").flatMap(CoolingMode.init(rawValue:)) ?? .cool
+                await beginCommissioning(mode: saved == .system ? .system : .cool)
             }
             if controlling || commissioning {
                 let renew = try await client.request(ServiceRequest(operation: .renew, session: session, enhancement: enhancement))
@@ -293,10 +305,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     commissioning = false
                     uiError = renew.error
                 }
-            } else if !initialModeApplied && !updating && status.commissioned && status.phase != .fault {
-                initialModeApplied = true
+            } else {
                 let saved = UserDefaults.standard.string(forKey: "preferredMode").flatMap(CoolingMode.init(rawValue:)) ?? .cool
-                if saved == .cool { await choose(.cool) }
+                if let mode = controlStartup.modeToApply(status: status, preferredMode: saved) { await choose(mode) }
             }
         } catch {
             controlling = false
@@ -309,8 +320,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // refused forever; relaunching is the only way back. Only a real
             // replacement counts — a daemon restart must not restart the app.
             if !updating && !updateCoordinator.requiresInstallConfirmation && replacedOnDisk { relaunch() ; return }
-            do { status.snapshot = try await monitor.sample() }
-            catch { status.snapshot = nil; uiError = "温度读取失败：\(error.localizedDescription)" }
+            do { status.snapshot = try await monitor.sample(); monitoringError = nil }
+            catch { status.snapshot = nil; monitoringError = "温度读取失败：\(error.localizedDescription)" }
         }
     }
 
@@ -365,15 +376,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func choose(_ mode: CoolingMode) async {
         guard !updating, !quitting else { return }
+        if mode == .system { controlStartup.cancel() }
+        let selection = UUID()
+        selectionID = selection
+        var accepted = false
         do {
             let response = try await client.request(ServiceRequest(operation: .select, session: session, mode: mode, enhancement: mode == .system ? nil : enhancement))
-            guard !updating, !quitting else { return }
+            guard !updating, !quitting, selectionID == selection else { return }
             guard response.ok else { throw HardwareError(response.error ?? response.status.message) }
-            status = response.status
+            accepted = true
+            let confirmed: ServiceStatus
+            if mode == .system {
+                confirmed = response.status
+            } else {
+                confirmed = try await ModeSelection.confirm(mode, initial: response.status, sample: {
+                    guard !self.updating, !self.quitting, self.selectionID == selection else { throw CancellationError() }
+                    return try await self.client.request(ServiceRequest(operation: .status, session: self.session)).status
+                })
+            }
+            guard !updating, !quitting, selectionID == selection else { return }
+            status = confirmed
             controlling = mode != .system
             uiError = nil
             if mode != .boost { UserDefaults.standard.set(mode.rawValue, forKey: "preferredMode") }
-        } catch { uiError = error.localizedDescription; controlling = false }
+        } catch {
+            guard !updating, !quitting, selectionID == selection else { return }
+            let reason = error.localizedDescription
+            controlling = false
+            uiError = reason
+            if accepted && mode != .system {
+                do {
+                    let restored = try await client.request(ServiceRequest(operation: .restore, session: session))
+                    guard !updating, !quitting, selectionID == selection else { return }
+                    status = restored.status
+                } catch {
+                    guard !updating, !quitting, selectionID == selection else { return }
+                    uiError = "\(reason)；恢复请求未确认：\(error.localizedDescription)"
+                }
+            }
+        }
         refresh()
     }
 
@@ -407,8 +448,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // here instead of only describing the state.
             commission()
         } else if status.available, !status.commissioned, uiError == nil {
-            // "尚未启用控制" is an invitation, not a status blurb: the next step
-            // is the safety check that enables control.
             commission()
         } else {
             showHelp()
@@ -471,7 +510,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func commission() {
-        guard !updating, !quitting else { return }
+        guard !updating, !quitting, !commissioning else { return }
+        controlStartup.cancel()
         let alert = NSAlert()
         alert.messageText = "验证风扇升速与自动恢复"
         let steps = "风扇将短时加速约 6 秒，然后检查是否恢复系统自动。请先退出 Macs Fan Control、Stats 或其他风扇控制工具。\n\n自检通过后将启用凉爽自动。更早散热会增加风扇声音和耗电，无法保证持续高负载时机身不热。"
@@ -481,19 +521,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         alert.addButton(withTitle: "取消")
         NSApp.activate(ignoringOtherApps: true)
         guard alert.runModal() == .alertFirstButtonReturn, !updating, !quitting else { return }
+        Task { await beginCommissioning() }
+    }
+
+    private func beginCommissioning(mode: CoolingMode = .cool) async {
+        guard !updating, !quitting, !commissioning else { return }
+        controlStartup.cancel()
         commissioning = true
+        commissioningMode = mode
         uiError = nil
         refresh()
-        Task {
+        do {
+            let response = try await client.request(ServiceRequest(operation: .commission, session: session))
             guard !updating, !quitting else { return }
-            do {
-                let response = try await client.request(ServiceRequest(operation: .commission, session: session))
-                guard !updating, !quitting else { return }
-                guard response.ok else { throw HardwareError(response.error ?? response.status.message) }
-                status = response.status
-            } catch { commissioning = false; uiError = error.localizedDescription }
-            refresh()
-        }
+            guard response.ok else { throw HardwareError(response.error ?? response.status.message) }
+            status = response.status
+        } catch { commissioning = false; uiError = error.localizedDescription }
+        refresh()
     }
 
     @objc private func restore() {
@@ -542,7 +586,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func showHelp() {
         let alert = NSAlert()
         alert.messageText = "清凉风扇 \(Product.version)"
-        alert.informativeText = "原生菜单栏工具，不占 Dock。\n\n凉爽自动：50°C 以上接管风扇持续散热，降到 42°C 才交还系统自动；发生异常、失联或严重热压力时立即交还。手动期间不主动降速。\n\n强力散热：最多 2 分钟，可能明显增加噪声和耗电。\n\n显示的是芯片传感器温度，不是机身表面温度。不要与其他风扇工具同时控制。\n\n\(uiError ?? status.message)\n\n诊断工具：应用包 Contents/Helpers/coolmacctl"
+        alert.informativeText = "原生菜单栏工具，不占 Dock。\n\n凉爽自动：50°C 以上接管风扇持续散热，降到 42°C 才交还系统自动；发生异常、失联或严重热压力时立即交还。手动期间不主动降速。\n\n强力散热：最多 2 分钟，可能明显增加噪声和耗电。\n\n显示的是芯片传感器温度，不是机身表面温度。不要与其他风扇工具同时控制。\n\n\(uiError ?? monitoringError ?? status.message)\n\n诊断工具：应用包 Contents/Helpers/coolmacctl"
         alert.addButton(withTitle: "知道了")
         NSApp.activate(ignoringOtherApps: true)
         alert.runModal()
@@ -555,7 +599,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
     @objc private func didWake() {
         controlling = false
-        initialModeApplied = false
+        controlStartup.didWake()
         Task { await poll() }
     }
 

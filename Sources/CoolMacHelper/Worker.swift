@@ -96,7 +96,10 @@ final class Worker {
         responseFailures = 0
         if resetPolicy { policy.reset() }
         status.selectedMode = .system
-        status.phase = .system
+        status.phase = StartupJournal.phaseAfterRestore(hasRecordedFault: hasState("fault"))
+        if status.phase == .fault {
+            status.message = StartupJournal.faultMessage(recorded: try? String(contentsOfFile: statePath("fault"), encoding: .utf8))
+        }
         status.boostRemaining = nil
         status.commandedRPM = nil
         commissionUntil = nil
@@ -144,7 +147,7 @@ final class Worker {
             return false
         case .restore:
             try restore()
-            status.message = "已确认系统自动控制"
+            if status.phase != .fault { status.message = "已确认系统自动控制" }
             try emit(restored: true)
         case .commission:
             guard commissionUntil == nil else { throw HardwareError("安全自检正在进行") }
@@ -175,7 +178,7 @@ final class Worker {
             if mode == .system {
                 try restore()
                 status.enhancement = enhancement
-                status.message = "已确认系统自动控制"
+                if status.phase != .fault { status.message = "已确认系统自动控制" }
                 try emit(restored: true)
                 break
             }
@@ -252,6 +255,7 @@ final class Worker {
                 try putState("commissioned", text: fingerprint(snapshot))
                 try removeState("fault")
                 status.commissioned = true
+                status.phase = .system
                 status.message = "安全自检通过：升速与恢复系统自动已验证"
                 status.snapshot = try hardware.sample()
                 try emit(restored: true, commissioned: true)

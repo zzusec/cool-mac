@@ -42,3 +42,8 @@ import Testing
     #expect(message.count < 200)
     #expect(message.hasSuffix("；请先恢复再重新安全自检"))
 }
+
+@Test func restoringAutomaticHardwareDoesNotClearARecordedControlFault() {
+    #expect(StartupJournal.phaseAfterRestore(hasRecordedFault: true) == .fault)
+    #expect(StartupJournal.phaseAfterRestore(hasRecordedFault: false) == .system)
+}

@@ -22,6 +22,10 @@ public enum StartupJournal {
         return hasOwnershipJournal ? .interrupted : .clean
     }
 
+    public static func phaseAfterRestore(hasRecordedFault: Bool) -> ControlPhase {
+        hasRecordedFault ? .fault : .system
+    }
+
     /// Reported once an interrupted session's ownership has been released.
     public static let interruptedMessage = "上次控制被系统中断，已恢复系统自动"
 
